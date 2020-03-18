@@ -107,6 +107,8 @@ class BengaliAIDataset(DatasetMixin):
         # for future Affine transformation
         if self.train:
             y = self.labels[i]
-            return x, y
+            y = y.reshape((1, -1))
+            y = np.concatenate([y, y])
+            return x, [y, 0.5]
         else:
             return x

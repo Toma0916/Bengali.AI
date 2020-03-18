@@ -36,6 +36,7 @@ from ignite.contrib.handlers import ProgressBar
 import cv2
 
 from efficientnet_pytorch import EfficientNet
+from utils.functions import get_y_main
 
 N_GRAPHEME = 168
 N_VOWEL = 11
@@ -60,12 +61,13 @@ class Attention2D(nn.Module):
         return out, attn
 
 
-class EfficientNet_b3(nn.Module):
-    def __init__(self, model_name='efficientnet-b3', in_channels=1, middle_dim=N_ROOT, out_dims=[N_GRAPHEME, N_VOWEL, N_CONSONANT], pretrained=True):
+class Predictor(nn.Module):
+    def __init__(self, model_name='efficientnet-b3', in_channels=1, middle_dim=N_ROOT, out_dims=[N_GRAPHEME, N_VOWEL, N_CONSONANT], pretrained=True, weights_path=None):
 
-        super(EfficientNet_b3, self).__init__()
+        super(Predictor, self).__init__()
 
         self.base_model = EfficientNet.from_pretrained(model_name, advprop=True)
+        self.weights_path = weights_path
 
         # attention
         self.attention_grapheme = Attention2D(1536)
@@ -81,11 +83,10 @@ class EfficientNet_b3(nn.Module):
         self.fc_grapheme = nn.Linear(infs+middle_dim, out_dims[0])
         self.fc_vowel = nn.Linear(infs, out_dims[1])
         self.fc_consonant = nn.Linear(infs, out_dims[2])
-      
-    def load_weight(self, weight_path):
-        print('load my weghts')
-        self.load_state_dict(torch.load(weight_path))
 
+        if self.weights_path is not None:
+            self.load_state_dict(torch.load(weight_path))
+      
 
     def forward(self, x):
 
@@ -135,7 +136,9 @@ def get_y_main(y, lams):
   return y_main
 
 
-def calc_ohem(cross_entropy, rate=0.75):
+def calc_ohem(cross_entropy, batch_size=None, rate=0.75):
+    if batch_size is None:
+        return cross_entropy
     sorted_ohem_loss, idx = torch.sort(cross_entropy, descending=True)
     keep_num = min(sorted_ohem_loss.size()[0], int(batch_size*rate))
     if keep_num < sorted_ohem_loss.size()[0]:
@@ -162,7 +165,8 @@ class Classifier(nn.Module):
 
 
     def forward(self, x, y=None, lams=None):
-        pred, _ = self.predictor(x) 
+        pred = self.predictor(x) 
+        batch_size = y.shape[0]
 
         if isinstance(pred, tuple):
             assert len(pred) == 4
