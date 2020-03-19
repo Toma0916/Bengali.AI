@@ -89,6 +89,8 @@ class DictOutputTransform:
 
 def create_trainer(classifier, optimizer, device):
     classifier.to(device)
+    metrics_keys = classifier.metrics_keys
+    classifier = torch.nn.DataParallel(classifier)
 
     def update_fn(engine, batch):
         classifier.train()
@@ -97,19 +99,21 @@ def create_trainer(classifier, optimizer, device):
         y = batch[1][0].to(device)
         lams = batch[1][1].to(device)
         loss, metrics, pred_y = classifier(x, y, lams)
-        loss.backward()
+        loss.sum().backward()
         optimizer.step()
         return metrics, pred_y, get_y_main(y, lams)
 
     trainer = Engine(update_fn)
 
-    for key in classifier.metrics_keys:
+    for key in metrics_keys:
         Average(output_transform=DictOutputTransform(key)).attach(trainer, key)
     return trainer
 
 
 def create_evaluator(classifier, device):
     classifier.to(device)
+    metrics_keys = classifier.metrics_keys
+    classifier = torch.nn.DataParallel(classifier)
 
     def update_fn(engine, batch):
         classifier.eval()
@@ -121,7 +125,7 @@ def create_evaluator(classifier, device):
             return metrics, pred_y, get_y_main(y, lams)  # nyan
     evaluator = Engine(update_fn)
 
-    for key in classifier.metrics_keys:
+    for key in metrics_keys:
         Average(output_transform=DictOutputTransform(key)).attach(evaluator, key)
     return evaluator
 
@@ -141,18 +145,26 @@ class LogReport:
 
     def __call__(self, engine):
 
+        def merge_values(values):
+            if isinstance(values, torch.Tensor):
+                return values.mean().item()
+            else:
+                return values
+
         elapsed_time = perf_counter() - self.start_time
         elem = {'epoch': engine.state.epoch,
                 'iteration': engine.state.iteration}
-        elem.update({f'train/{key}': value
+
+        elem.update({f'train/{key}': merge_values(value)
                      for key, value in engine.state.metrics.items()})
         # elem['train/recall: ']
         if self.evaluator is not None:
-            elem.update({f'valid/{key}': value
+            elem.update({f'valid/{key}': merge_values(value)
                          for key, value in self.evaluator.state.metrics.items()})
         elem.update(self.reported_dict)
         elem['elapsed_time'] = elapsed_time
         self.history.append(elem)
+
         if self.dirpath:
             save_json(os.path.join(self.dirpath, 'log.json'), self.history)
             self.get_dataframe().to_csv(os.path.join(self.dirpath, 'log.csv'), index=False)
@@ -277,19 +289,3 @@ class EpochMetric(Metric):
         return self.compute_fn(self._predictions, self._targets)
 
 
-
-# def save_configs():
-#   conf_info = {
-#     'is_debug': debug,
-#     'batch_size': batch_size,
-#     'load_weight_name': load_weight_name,
-#     'save_name': save_name,
-#     'epochs ': max_epochs,
-#   }
-#   for key, value in train_augment_config.items():
-#     conf_info['train_' + key] = value
-#   for key, value in valid_augment_config.items():
-#     conf_info['valid_' + key] = value
-  
-#   with open(outdir/'config.json', 'w') as f:
-#     json.dump(conf_info, f)

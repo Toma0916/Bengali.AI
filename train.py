@@ -1,3 +1,4 @@
+import argparse
 import os
 from pathlib import Path
 import random
@@ -9,6 +10,7 @@ from logging import getLogger
 from time import perf_counter
 import warnings
 import glob
+warnings.filterwarnings('ignore')
 
 import numpy as np 
 from numpy.random.mtrand import RandomState
@@ -23,6 +25,7 @@ from torch.nn import Sequential
 from torch.utils.data.dataset import Dataset
 from torch.utils.data.dataloader import DataLoader
 from torch.utils.tensorboard import SummaryWriter
+torch.backends.cudnn.benchmark=True
 
 from sklearn import preprocessing
 from sklearn.model_selection import KFold
@@ -35,51 +38,43 @@ from ignite.contrib.handlers import ProgressBar
 
 import cv2
 
-from prepare import prepare_image
 from model import Predictor, Classifier
 
 from utils.dataloader import BengaliAIDataset
 from utils.train_utils import create_trainer, create_evaluator, LogReport, ModelSnapshotHandler, EpochMetric
+from utils.functions import prepare_image, get_train_labels, save_configs
 
 if __name__ == '__main__':
 
-    debug = True
-    device = torch.device('cuda:0')
-    random_seed = 373
-    batch_size = 4
-    epochs = 10
 
+
+    parser = argparse.ArgumentParser()
+
+    parser.add_argument('--batch_size', type=int, default=8)
+    parser.add_argument('--epochs', type=int, default=10)
+    # parser.add_argument('--device')
+    parser.add_argument('--output_dir', default='default')
+    parser.add_argument('--seed', type=int, default=42)
+    parser.add_argument('--debug', action='store_true')
+    args = parser.parse_args()
+
+    debug = args.debug
+    device = torch.device('cuda:0')
+    random_seed = args.seed
+    batch_size = args.batch_size
+    epochs = args.epochs
     datadir = Path('.').resolve()/'data'
-    outputdir = Path('.').resolve()/'output' / 'example1'
+    outputdir = Path('.').resolve()/'output' / args.output_dir
     train = pd.read_csv(datadir/'train.csv')
     cls_map = pd.read_csv(datadir/'class_map.csv')
-    grapheme_map = cls_map.loc[cls_map['component_type']=='grapheme_root', :]
+    train_labels = get_train_labels(train, cls_map)
 
-    grapheme_set = []
-    for i, row in grapheme_map.iterrows():
-        grapheme_set.extend(list(row['component']))
-    grapheme_set = sorted(list(set(grapheme_set)))
-
-    graphemeroot2num = {}
-    for i, graphemeroot in enumerate(grapheme_set):
-        graphemeroot2num[graphemeroot] = i
-
-    graphemeroot2component = {}
-    for i, row in grapheme_map.iterrows():
-        item = [0] * 50
-        for cmp in list(row['component']):
-            item[graphemeroot2num[cmp]] = 1
-        graphemeroot2component[row['label']] = np.array(item)
-
-    train_labels = train[['grapheme_root', 'vowel_diacritic', 'consonant_diacritic']].values
-    train_labels__ = np.zeros((train_labels.shape[0], 53), dtype=np.int64)
-    for i in range(train_labels.shape[0]):
-        label = np.concatenate([train_labels[i], graphemeroot2component[train_labels[i][0]]])
-        train_labels__[i] = label
-
-    train_labels = train_labels__
-
-
+    train_config = {
+        'debug': debug,
+        'random_seed': random_seed,
+        'batch_size': batch_size,
+        'epochs': epochs,
+    }
 
     indices = [0] if debug else [0, 1, 2, 3]
     train_images = prepare_image(datadir, data_type='train', indices=indices)
@@ -109,15 +104,14 @@ if __name__ == '__main__':
     pbar = ProgressBar()
     pbar.attach(trainer, metric_names='all')
 
-
     def run_evaluator(engine):
         evaluator.run(valid_loader)
 
-    
     def schedule_lr(engine):
         metrics = evaluator.state.metrics
         avg_mae = metrics['loss']
-
+        if not isinstance(avg_mae, float):
+            avg_mae = avg_mae.mean()
         # --- update lr ---
         lr = scheduler.optimizer.param_groups[0]['lr']
         scheduler.step(avg_mae)
@@ -131,5 +125,5 @@ if __name__ == '__main__':
     trainer.add_event_handler(Events.EPOCH_COMPLETED, log_report)
     trainer.add_event_handler(Events.EPOCH_COMPLETED, ModelSnapshotHandler(predictor, filepath=outputdir/'predictor_{count:06}.pt'))
 
-    # save_configs()
+    save_configs(train_config, outputdir)
     trainer.run(train_loader, max_epochs=epochs)
