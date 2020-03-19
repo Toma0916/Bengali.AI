@@ -131,9 +131,10 @@ def create_evaluator(classifier, device):
 
 
 class LogReport:
-    def __init__(self, evaluator=None, dirpath=None, logger=None):
+    def __init__(self, evaluator=None, dirpath=None, debug=False, logger=None):
         self.evaluator = evaluator
         self.dirpath = str(dirpath) if dirpath is not None else None
+        self.debug_mode = 'debug/' if debug else 'experiment/'
         self.logger = logger or getLogger(__name__)
 
         self.reported_dict = {}  # To handle additional parameter to monitor
@@ -165,6 +166,10 @@ class LogReport:
         elem['elapsed_time'] = elapsed_time
         self.history.append(elem)
 
+        for key, value in elem.items():
+            if 'train' in key or 'valid' in key:
+                self.logger.add_scalar(self.debug_mode + key, value, engine.state.epoch)
+            
         if self.dirpath:
             save_json(os.path.join(self.dirpath, 'log.json'), self.history)
             self.get_dataframe().to_csv(os.path.join(self.dirpath, 'log.csv'), index=False)

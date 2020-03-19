@@ -40,7 +40,7 @@ import cv2
 
 from model import Predictor, Classifier
 
-from utils.dataloader import BengaliAIDataset
+from utils.dataloader import BengaliAIDataset, Transform
 from utils.train_utils import create_trainer, create_evaluator, LogReport, ModelSnapshotHandler, EpochMetric
 from utils.functions import prepare_image, get_train_labels, save_configs
 
@@ -56,6 +56,10 @@ if __name__ == '__main__':
     parser.add_argument('--output_dir', default='default')
     parser.add_argument('--seed', type=int, default=42)
     parser.add_argument('--debug', action='store_true')
+    parser.add_argument('--mixup_ratio', type=float, default=0.)
+    parser.add_argument('--cutmix_ratio', type=float, default=0.)
+    parser.add_argument('--affine_ratio', type=float, default=0.)
+
     args = parser.parse_args()
 
     debug = args.debug
@@ -68,6 +72,7 @@ if __name__ == '__main__':
     train = pd.read_csv(datadir/'train.csv')
     cls_map = pd.read_csv(datadir/'class_map.csv')
     train_labels = get_train_labels(train, cls_map)
+    writer = SummaryWriter(log_dir=outputdir)
 
     train_config = {
         'debug': debug,
@@ -76,6 +81,26 @@ if __name__ == '__main__':
         'epochs': epochs,
     }
 
+    train_aug_config = {
+        'mixup_ratio': args.mixup_ratio,
+        'cutmix_ratio': args.cutmix_ratio,
+        'affine_ratio': args.affine_ratio,
+        'normalize': True,
+    }
+
+    valid_aug_config = {
+        'mixup_ratio': 0.,
+        'cutmix_ratio': 0.,
+        'affine_ratio': 1.,
+        'normalize': True,
+    }
+
+    config = train_config
+    for key, value in train_aug_config.items():
+        config['train' + key] = value
+    for key, value in valid_aug_config.items():
+        config['valid_' + key] = value
+
     indices = [0] if debug else [0, 1, 2, 3]
     train_images = prepare_image(datadir, data_type='train', indices=indices)
     n_dataset = train_images.shape[0]
@@ -83,8 +108,8 @@ if __name__ == '__main__':
     train_data_size = 200 if debug else int(n_dataset * 0.9)
     valid_data_size = 100 if debug else int(n_dataset - train_data_size)
     perm = np.random.RandomState(random_seed).permutation(n_dataset)
-    train_dataset = BengaliAIDataset(train_images, train_labels, indices=perm[:train_data_size])
-    valid_dataset = BengaliAIDataset(train_images, train_labels, indices=perm[train_data_size:train_data_size+valid_data_size])
+    train_dataset = BengaliAIDataset(train_images, train_labels, transform=Transform(train_aug_config), indices=perm[:train_data_size])
+    valid_dataset = BengaliAIDataset(train_images, train_labels, transform=Transform(valid_aug_config), indices=perm[train_data_size:train_data_size+valid_data_size])
 
     predictor = Predictor(weights_path=None)
     classifier = Classifier(predictor).to(device)
@@ -118,12 +143,14 @@ if __name__ == '__main__':
         log_report.report('lr', lr)
     
     os.makedirs(outputdir, exist_ok=True)
-    log_report = LogReport(evaluator, outputdir)
+    log_report = LogReport(evaluator, outputdir, debug=debug, logger=writer)
 
     trainer.add_event_handler(Events.EPOCH_COMPLETED, run_evaluator)
     trainer.add_event_handler(Events.EPOCH_COMPLETED, schedule_lr)
     trainer.add_event_handler(Events.EPOCH_COMPLETED, log_report)
     trainer.add_event_handler(Events.EPOCH_COMPLETED, ModelSnapshotHandler(predictor, filepath=outputdir/'predictor_{count:06}.pt'))
 
-    save_configs(train_config, outputdir)
+    save_configs(config, outputdir)
+
     trainer.run(train_loader, max_epochs=epochs)
+    writer.close()
