@@ -192,16 +192,7 @@ class Classifier(nn.Module):
         loss = loss_grapheme + loss_vowel + loss_consonant + loss_root 
 
         y_main = get_y_main(y, lams)
-        # metrics = {
-        #     'loss': loss.item(),
-        #     'loss_grapheme': loss_grapheme.item(),
-        #     'loss_vowel': loss_vowel.item(),
-        #     'loss_consonant': loss_consonant.item(),
-        #     'loss_root':loss_root.item(),
-        #     'acc_grapheme': accuracy(preds[0], y_main[:, 0]),
-        #     'acc_vowel': accuracy(preds[1], y_main[:, 1]), 
-        #     'acc_consonant': accuracy(preds[2], y_main[:, 2]),
-        # }
+
         metrics = {
             'loss': loss,
             'loss_grapheme': loss_grapheme,
