@@ -46,14 +46,12 @@ from utils.functions import prepare_image, get_train_labels, save_configs
 
 if __name__ == '__main__':
 
-
-
     parser = argparse.ArgumentParser()
 
     parser.add_argument('--batch_size', type=int, default=8)
     parser.add_argument('--epochs', type=int, default=10)
-    # parser.add_argument('--device')
-    parser.add_argument('--output_dir', default='default')
+    parser.add_argument('--lr', type=float, default=0.001)
+    parser.add_argument('--output_dir', default='sample')
     parser.add_argument('--seed', type=int, default=42)
     parser.add_argument('--debug', action='store_true')
     parser.add_argument('--mixup_ratio', type=float, default=0.)
@@ -62,17 +60,58 @@ if __name__ == '__main__':
 
     args = parser.parse_args()
 
-    debug = args.debug
-    device = torch.device('cuda:0')
-    random_seed = args.seed
-    batch_size = args.batch_size
-    epochs = args.epochs
     datadir = Path('.').resolve()/'data'
     outputdir = Path('.').resolve()/'output' / args.output_dir
     train = pd.read_csv(datadir/'train.csv')
     cls_map = pd.read_csv(datadir/'class_map.csv')
     train_labels = get_train_labels(train, cls_map)
     writer = SummaryWriter(log_dir=outputdir)
+    device = torch.device('cuda:0')
+
+    if os.path.exists(outputdir):
+        print('output directory already exists. load history from there.')
+
+        try:
+            with open(outputdir/'train_config.json', 'r') as f:
+                train_config_hist = json.load(f)
+                debug = train_config_hist['debug']
+                random_seed = train_config_hist['random_seed']
+        except FileNotFoundError:
+            debug = args.debug
+            random_seed = args.seed
+        
+        try:
+            with open(outputdir/'log.json', 'r') as f:
+                log_hist = json.load(f)[-1]
+                initial_lr = log_hist['lr']
+                trained_epoch = log_hist['epoch']
+        except FileNotFoundError:
+            initial_lr = args.lr
+            trained_epoch = 0
+
+        trained_weights_paths = sorted(list((Path('.')/outputdir).glob('*.pt')))
+        if len(trained_weights_paths) != 0:
+            trained_weights_path = trained_weights_paths[-1]
+        else:
+            trained_weights_path = None        
+
+        batch_size = args.batch_size
+        epochs = args.epochs
+        mixup_ratio = args.mixup_ratio
+        cutmix_ratio = args.cutmix_ratio
+        affine_ratio = args.affine_ratio
+
+    else:
+        debug = args.debug
+        random_seed = args.seed
+        batch_size = args.batch_size
+        initial_lr = args.lr
+        epochs = args.epochs
+        mixup_ratio = args.mixup_ratio
+        cutmix_ratio = args.cutmix_ratio
+        affine_ratio = args.affine_ratio
+        trained_epoch = 0
+        trained_weights_path = None        
 
     train_config = {
         'debug': debug,
@@ -82,16 +121,16 @@ if __name__ == '__main__':
     }
 
     train_aug_config = {
-        'mixup_ratio': args.mixup_ratio,
-        'cutmix_ratio': args.cutmix_ratio,
-        'affine_ratio': args.affine_ratio,
+        'mixup_ratio': mixup_ratio,
+        'cutmix_ratio': cutmix_ratio,
+        'affine_ratio': affine_ratio,
         'normalize': True,
     }
 
     valid_aug_config = {
         'mixup_ratio': 0.,
         'cutmix_ratio': 0.,
-        'affine_ratio': 1.,
+        'affine_ratio': 0.,
         'normalize': True,
     }
 
@@ -111,13 +150,13 @@ if __name__ == '__main__':
     train_dataset = BengaliAIDataset(train_images, train_labels, transform=Transform(train_aug_config), indices=perm[:train_data_size])
     valid_dataset = BengaliAIDataset(train_images, train_labels, transform=Transform(valid_aug_config), indices=perm[train_data_size:train_data_size+valid_data_size])
 
-    predictor = Predictor(weights_path=None)
+    predictor = Predictor(weights_path=trained_weights_path)
     classifier = Classifier(predictor).to(device)
 
     train_loader = DataLoader(train_dataset, batch_size=batch_size, shuffle=True)
     valid_loader = DataLoader(valid_dataset, batch_size=batch_size, shuffle=False)
 
-    optimizer = torch.optim.Adam(classifier.parameters(), lr=0.0001)
+    optimizer = torch.optim.Adam(classifier.parameters(), lr=initial_lr)
     scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(optimizer, mode='min', factor=0.5, patience=2, min_lr=1e-10)
 
     trainer = create_trainer(classifier, optimizer, device)
@@ -143,12 +182,12 @@ if __name__ == '__main__':
         log_report.report('lr', lr)
     
     os.makedirs(outputdir, exist_ok=True)
-    log_report = LogReport(evaluator, outputdir, debug=debug, logger=writer)
+    log_report = LogReport(evaluator, trained_epoch=trained_epoch, dirpath=outputdir, debug=debug, logger=writer)
 
     trainer.add_event_handler(Events.EPOCH_COMPLETED, run_evaluator)
     trainer.add_event_handler(Events.EPOCH_COMPLETED, schedule_lr)
     trainer.add_event_handler(Events.EPOCH_COMPLETED, log_report)
-    trainer.add_event_handler(Events.EPOCH_COMPLETED, ModelSnapshotHandler(predictor, filepath=outputdir/'predictor_{count:06}.pt'))
+    trainer.add_event_handler(Events.EPOCH_COMPLETED, ModelSnapshotHandler(predictor, filepath=outputdir/'predictor_{count:06}.pt', trained_epoch=trained_epoch, interval=10))
 
     save_configs(config, outputdir)
 

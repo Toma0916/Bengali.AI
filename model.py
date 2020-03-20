@@ -85,7 +85,7 @@ class Predictor(nn.Module):
         self.fc_consonant = nn.Linear(infs, out_dims[2])
 
         if self.weights_path is not None:
-            self.load_state_dict(torch.load(weight_path))
+            self.load_state_dict(torch.load(self.weights_path))
       
 
     def forward(self, x):

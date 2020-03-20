@@ -131,8 +131,9 @@ def create_evaluator(classifier, device):
 
 
 class LogReport:
-    def __init__(self, evaluator=None, dirpath=None, debug=False, logger=None):
+    def __init__(self, evaluator=None, trained_epoch=0, dirpath=None, debug=False, logger=None):
         self.evaluator = evaluator
+        self.trained_epoch = trained_epoch
         self.dirpath = str(dirpath) if dirpath is not None else None
         self.debug_mode = 'debug/' if debug else 'experiment/'
         self.logger = logger or getLogger(__name__)
@@ -153,7 +154,7 @@ class LogReport:
                 return values
 
         elapsed_time = perf_counter() - self.start_time
-        elem = {'epoch': engine.state.epoch,
+        elem = {'epoch': engine.state.epoch + self.trained_epoch,
                 'iteration': engine.state.iteration}
 
         elem.update({f'train/{key}': merge_values(value)
@@ -167,8 +168,8 @@ class LogReport:
         self.history.append(elem)
 
         for key, value in elem.items():
-            if 'train' in key or 'valid' in key:
-                self.logger.add_scalar(self.debug_mode + key, value, engine.state.epoch)
+            if 'train' in key or 'valid' in key or key == 'lr':
+                self.logger.add_scalar(self.debug_mode + key, value, elem['epoch'])
             
         if self.dirpath:
             save_json(os.path.join(self.dirpath, 'log.json'), self.history)
@@ -205,19 +206,22 @@ class LogReport:
 
 class ModelSnapshotHandler:
     def __init__(self, model, filepath='model_{count:06}.pt',
-                 interval=1, logger=None):
+                 trained_epoch=0, interval=1, logger=None):
         self.model = model
         self.filepath: str = str(filepath)
         self.interval = interval
         self.logger = logger or getLogger(__name__)
-        self.count = 0
+        self.count = trained_epoch
 
         
     def __call__(self, engine: Engine):
         self.count += 1
-        if self.count % self.interval == 0:
-            filepath = self.filepath.format(count=self.count)
-            torch.save(self.model.state_dict(), filepath)
+        filepath = self.filepath.format(count=self.count)
+        torch.save(self.model.state_dict(), filepath)
+
+        if (self.count - 1) % self.interval != 0:
+            filepath = self.filepath.format(count=self.count-1)
+            os.remove(filepath)
             # self.logger.warning(f'save model to {filepath}...')
 
 
